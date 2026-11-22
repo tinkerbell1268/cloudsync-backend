@@ -2,7 +2,6 @@ import asyncio
 import secrets
 from datetime import datetime
 from fastapi import WebSocket, WebSocketDisconnect
-from speed_limit import throttle
 
 RELAY_BUF = 256 * 1024
 
@@ -48,6 +47,7 @@ async def check_and_use(uid: str, n: int) -> bool:
 
 async def relay_ws_to_tcp(ws: WebSocket, writer: asyncio.StreamWriter, conn_id: str, uid: str):
     import main
+    from speed_limit import throttle
     try:
         while True:
             msg = await ws.receive()
@@ -75,6 +75,7 @@ async def relay_ws_to_tcp(ws: WebSocket, writer: asyncio.StreamWriter, conn_id: 
 
 async def relay_tcp_to_ws(ws: WebSocket, reader: asyncio.StreamReader, conn_id: str, uid: str):
     import main
+    from speed_limit import throttle
     first = True
     try:
         while True:
