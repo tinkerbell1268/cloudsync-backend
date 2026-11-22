@@ -2,20 +2,6 @@ import asyncio
 import secrets
 from datetime import datetime
 from fastapi import WebSocket, WebSocketDisconnect
-
-from main import (
-    LINKS,
-    LINKS_LOCK,
-    stats,
-    hourly_traffic,
-    connections,
-    error_logs,
-    is_link_allowed,
-    is_ip_allowed,
-    save_state,
-    log_activity,
-    now_ir,
-)
 from speed_limit import throttle
 
 RELAY_BUF = 256 * 1024
@@ -50,16 +36,18 @@ async def parse_header(chunk: bytes):
     return command, address, port, chunk[pos:]
 
 async def check_and_use(uid: str, n: int) -> bool:
-    async with LINKS_LOCK:
-        link = LINKS.get(uid)
-        if link is None or not is_link_allowed(link):
+    import main
+    async with main.LINKS_LOCK:
+        link = main.LINKS.get(uid)
+        if link is None or not main.is_link_allowed(link):
             return False
         link["used_bytes"] += n
-        stats["total_bytes"] += n
-        hourly_traffic[now_ir().strftime("%H:00")] += n
+        main.stats["total_bytes"] += n
+        main.hourly_traffic[main.now_ir().strftime("%H:00")] += n
     return True
 
 async def relay_ws_to_tcp(ws: WebSocket, writer: asyncio.StreamWriter, conn_id: str, uid: str):
+    import main
     try:
         while True:
             msg = await ws.receive()
@@ -72,8 +60,8 @@ async def relay_ws_to_tcp(ws: WebSocket, writer: asyncio.StreamWriter, conn_id: 
                 await ws.close(code=1008)
                 break
             await throttle(uid, len(data))
-            stats["total_requests"] += 1
-            connections[conn_id]["bytes"] += len(data)
+            main.stats["total_requests"] += 1
+            main.connections[conn_id]["bytes"] += len(data)
             writer.write(data)
             if writer.transport.get_write_buffer_size() > RELAY_BUF:
                 await writer.drain()
@@ -86,6 +74,7 @@ async def relay_ws_to_tcp(ws: WebSocket, writer: asyncio.StreamWriter, conn_id: 
             pass
 
 async def relay_tcp_to_ws(ws: WebSocket, reader: asyncio.StreamReader, conn_id: str, uid: str):
+    import main
     first = True
     try:
         while True:
@@ -96,7 +85,7 @@ async def relay_tcp_to_ws(ws: WebSocket, reader: asyncio.StreamReader, conn_id: 
                 await ws.close(code=1008)
                 break
             await throttle(uid, len(data))
-            connections[conn_id]["bytes"] += len(data)
+            main.connections[conn_id]["bytes"] += len(data)
             payload = (b"\x00\x00" + data) if first else data
             first = False
             await ws.send_bytes(payload)
@@ -104,22 +93,23 @@ async def relay_tcp_to_ws(ws: WebSocket, reader: asyncio.StreamReader, conn_id: 
         pass
 
 async def websocket_tunnel(ws: WebSocket, uuid: str):
+    import main
     await ws.accept()
-    async with LINKS_LOCK:
-        link = LINKS.get(uuid)
+    async with main.LINKS_LOCK:
+        link = main.LINKS.get(uuid)
 
-    if not is_link_allowed(link):
+    if not main.is_link_allowed(link):
         await ws.close(code=1008)
         return
 
     ip = _ws_client_ip(ws)
-    if not is_ip_allowed(link, uuid, ip):
-        log_activity("connection", f"اتصال {ip} به «{link.get('label','?')}» رد شد", "warn")
+    if not main.is_ip_allowed(link, uuid, ip):
+        main.log_activity("connection", f"اتصال {ip} به «{link.get('label','?')}» رد شد", "warn")
         await ws.close(code=1008)
         return
 
     conn_id = secrets.token_urlsafe(6)
-    connections[conn_id] = {
+    main.connections[conn_id] = {
         "uuid": uuid,
         "ip": ip,
         "transport": "ws",
@@ -141,8 +131,8 @@ async def websocket_tunnel(ws: WebSocket, uuid: str):
             await ws.close(code=1008)
             return
 
-        stats["total_requests"] += 1
-        connections[conn_id]["bytes"] += len(first_chunk)
+        main.stats["total_requests"] += 1
+        main.connections[conn_id]["bytes"] += len(first_chunk)
 
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(address, port),
@@ -171,13 +161,13 @@ async def websocket_tunnel(ws: WebSocket, uuid: str):
             except asyncio.CancelledError:
                 pass
 
-        asyncio.create_task(save_state())
+        asyncio.create_task(main.save_state())
 
     except (WebSocketDisconnect, asyncio.TimeoutError):
         pass
     except Exception as exc:
-        stats["total_errors"] += 1
-        error_logs.append({"error": str(exc), "time": datetime.now().isoformat()})
+        main.stats["total_errors"] += 1
+        main.error_logs.append({"error": str(exc), "time": datetime.now().isoformat()})
     finally:
         if writer:
             try:
@@ -185,4 +175,4 @@ async def websocket_tunnel(ws: WebSocket, uuid: str):
                 await writer.wait_closed()
             except Exception:
                 pass
-        connections.pop(conn_id, None)
+        main.connections.pop(conn_id, None)
