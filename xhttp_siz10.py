@@ -31,7 +31,7 @@ from main import (
     is_ip_allowed,
     save_state,
 )
-from relay_vless import parse_vless_header, check_and_use
+from ws_stream import parse_header as parse_vless_header, check_and_use
 from speed_limit import throttle
 
 router = APIRouter()
